@@ -1,0 +1,53 @@
+#!/bin/bash
+set -e
+echo "🔄 Running database migrations..."
+export $(grep -v '^#' .env | grep -v '^$' | xargs)
+
+docker exec portfolio_mariadb mariadb -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} << 'SQL'
+CREATE TABLE IF NOT EXISTS contributions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  portfolio_id INT NOT NULL,
+  amount DECIMAL(18,6) NOT NULL,
+  date DATE NOT NULL,
+  notes TEXT DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS etf_master (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  symbol VARCHAR(20) NOT NULL UNIQUE,
+  base_symbol VARCHAR(10) NOT NULL,
+  description TEXT NOT NULL,
+  sector VARCHAR(100) DEFAULT NULL,
+  region VARCHAR(100) DEFAULT NULL,
+  manager VARCHAR(100) DEFAULT NULL,
+  fund_page VARCHAR(500) DEFAULT NULL,
+  dividend_payout VARCHAR(100) DEFAULT NULL,
+  consistent_dividends TINYINT(1) DEFAULT NULL,
+  category ENUM('Anchor','Booster','Juicer','Growth Stock') DEFAULT NULL,
+  notes TEXT DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS user_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL UNIQUE,
+  smtp_host VARCHAR(255) DEFAULT NULL,
+  smtp_port INT DEFAULT 587,
+  smtp_user VARCHAR(255) DEFAULT NULL,
+  smtp_pass VARCHAR(255) DEFAULT NULL,
+  smtp_from VARCHAR(255) DEFAULT NULL,
+  smtp_secure TINYINT(1) DEFAULT 0,
+  alpha_vantage_key VARCHAR(255) DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+ALTER TABLE portfolios ADD COLUMN IF NOT EXISTS owner_name VARCHAR(100) DEFAULT NULL AFTER user_id;
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS sector VARCHAR(100) DEFAULT NULL;
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS region VARCHAR(100) DEFAULT NULL;
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS management_fee DECIMAL(6,4) DEFAULT NULL;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS action ENUM('CASH','REINVESTED') DEFAULT 'CASH';
+SELECT 'Migration complete!' AS status;
+SHOW TABLES;
+SQL
+echo "✅ Migration done!"

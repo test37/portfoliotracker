@@ -1,0 +1,88 @@
+services:
+  mariadb:
+    image: mariadb:11
+    container_name: portfolio_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - portfolio_net
+
+  api:
+    image: test37/portfolio-api:latest
+    container_name: portfolio_api
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      PORT: 4200
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY:-}
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - portfolio_net
+
+  worker:
+    image: test37/portfolio-api:latest
+    container_name: portfolio_worker
+    restart: unless-stopped
+    command: node src/worker/index.js
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY:-}
+    networks:
+      - portfolio_net
+
+  frontend:
+    image: test37/portfolio-frontend:latest
+    container_name: portfolio_frontend
+    restart: unless-stopped
+    networks:
+      - portfolio_net
+
+  nginx:
+    image: nginx:alpine
+    container_name: portfolio_nginx
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8282}:80"
+    depends_on:
+      - api
+      - frontend
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./backend/uploads:/var/www/uploads
+    networks:
+      - portfolio_net
+
+networks:
+  portfolio_net:
+    driver: bridge
+
+volumes:
+  mariadb_data:

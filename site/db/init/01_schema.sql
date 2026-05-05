@@ -1,0 +1,144 @@
+-- Users
+CREATE TABLE IF NOT EXISTS users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password VARCHAR(255) NOT NULL,
+  name VARCHAR(255),
+  totp_secret VARCHAR(255) DEFAULT NULL,
+  totp_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  email_otp_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Email OTPs
+CREATE TABLE IF NOT EXISTS email_otps (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  purpose VARCHAR(20) NOT NULL DEFAULT 'login',
+  code_hash VARCHAR(255) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  used TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_user (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- User Settings (SMTP, API keys)
+CREATE TABLE IF NOT EXISTS user_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL UNIQUE,
+  smtp_host VARCHAR(255) DEFAULT NULL,
+  smtp_port INT DEFAULT 587,
+  smtp_user VARCHAR(255) DEFAULT NULL,
+  smtp_pass VARCHAR(255) DEFAULT NULL,
+  smtp_from VARCHAR(255) DEFAULT NULL,
+  smtp_secure TINYINT(1) DEFAULT 0,
+  alpha_vantage_key VARCHAR(255) DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ETF Master List
+CREATE TABLE IF NOT EXISTS etf_master (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  symbol VARCHAR(20) NOT NULL UNIQUE,
+  base_symbol VARCHAR(10) NOT NULL,
+  description TEXT NOT NULL,
+  sector VARCHAR(100) DEFAULT NULL,
+  region VARCHAR(100) DEFAULT NULL,
+  manager VARCHAR(100) DEFAULT NULL,
+  fund_page VARCHAR(500) DEFAULT NULL,
+  dividend_payout VARCHAR(100) DEFAULT NULL,
+  consistent_dividends TINYINT(1) DEFAULT NULL,
+  category ENUM('Anchor','Booster','Juicer','Growth Stock') DEFAULT NULL,
+  notes TEXT DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Portfolios
+CREATE TABLE IF NOT EXISTS portfolios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  owner_name VARCHAR(100) DEFAULT NULL,
+  name VARCHAR(255) NOT NULL,
+  type ENUM('RRSP','LIRA','TFSA','Non-Registered') NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Holdings
+CREATE TABLE IF NOT EXISTS holdings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  portfolio_id INT NOT NULL,
+  symbol VARCHAR(20) NOT NULL,
+  name VARCHAR(255),
+  type ENUM('ETF','SHARE') NOT NULL DEFAULT 'SHARE',
+  quantity DECIMAL(18,6) NOT NULL DEFAULT 0,
+  average_cost DECIMAL(18,6) NOT NULL DEFAULT 0,
+  current_price DECIMAL(18,6) DEFAULT NULL,
+  price_updated_at TIMESTAMP NULL,
+  sector VARCHAR(100) DEFAULT NULL,
+  region VARCHAR(100) DEFAULT NULL,
+  management_fee DECIMAL(6,4) DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_holding (portfolio_id, symbol)
+);
+
+-- Transactions
+CREATE TABLE IF NOT EXISTS transactions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  holding_id INT NOT NULL,
+  type ENUM('BUY','SELL') NOT NULL DEFAULT 'BUY',
+  quantity DECIMAL(18,6) NOT NULL,
+  price DECIMAL(18,6) NOT NULL,
+  commission DECIMAL(18,6) NOT NULL DEFAULT 0,
+  total DECIMAL(18,6) NOT NULL,
+  realized_pnl DECIMAL(18,6) DEFAULT NULL,
+  date DATE NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (holding_id) REFERENCES holdings(id) ON DELETE CASCADE
+);
+
+-- Dividends
+CREATE TABLE IF NOT EXISTS dividends (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  holding_id INT NOT NULL,
+  amount DECIMAL(18,6) NOT NULL,
+  amount_per_share DECIMAL(18,6),
+  shares_held DECIMAL(18,6),
+  date DATE NOT NULL,
+  payment_date DATE,
+  frequency ENUM('monthly','quarterly','semi-annual','annual') DEFAULT 'quarterly',
+  tax_withheld DECIMAL(18,6) DEFAULT 0,
+  action ENUM('CASH','REINVESTED') DEFAULT 'CASH',
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (holding_id) REFERENCES holdings(id) ON DELETE CASCADE
+);
+
+-- Contributions (TFSA tracking)
+CREATE TABLE IF NOT EXISTS contributions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  portfolio_id INT NOT NULL,
+  amount DECIMAL(18,6) NOT NULL,
+  date DATE NOT NULL,
+  notes TEXT DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
+);
+
+-- Price History
+CREATE TABLE IF NOT EXISTS price_history (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  symbol VARCHAR(20) NOT NULL,
+  price DECIMAL(18,6) NOT NULL,
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_symbol (symbol),
+  INDEX idx_fetched_at (fetched_at)
+);

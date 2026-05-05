@@ -1,0 +1,26 @@
+{
+  "name": "portfolio-management-api",
+  "version": "1.0.0",
+  "description": "Portfolio management backend API with MariaDB",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "worker": "node src/worker/index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mariadb": "^3.4.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^8.0.4",
+    "otplib": "^13.4.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

@@ -1,0 +1,366 @@
+import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
+import api from '../lib/api'
+import Modal from '../components/Modal'
+
+const TYPE_COLORS = {
+  RRSP: 'bg-blue-100 text-blue-800',
+  LIRA: 'bg-purple-100 text-purple-800',
+  TFSA: 'bg-emerald-100 text-emerald-800',
+  'Non-Registered': 'bg-orange-100 text-orange-800',
+}
+
+const PORTFOLIO_TYPES = ['RRSP', 'LIRA', 'TFSA', 'Non-Registered']
+
+const TFSA_LIMITS_BY_YEAR = {
+  2009: 5000, 2010: 5000, 2011: 5000, 2012: 5000,
+  2013: 5500, 2014: 5500, 2015: 10000, 2016: 5500,
+  2017: 5500, 2018: 5500, 2019: 6000, 2020: 6000,
+  2021: 6000, 2022: 6000, 2023: 6500, 2024: 7000,
+  2025: 7000, 2026: 7000,
+}
+
+const CURRENT_YEAR = new Date().getFullYear()
+const TFSA_ANNUAL_LIMIT = TFSA_LIMITS_BY_YEAR[CURRENT_YEAR] || 7000
+const TFSA_LIFETIME_LIMIT = Object.values(TFSA_LIMITS_BY_YEAR).reduce((a, b) => a + b, 0)
+
+function fmt(val) {
+  return Number(val || 0).toLocaleString('en-CA', { style: 'currency', currency: 'CAD' })
+}
+
+function pct(val) {
+  const n = Number(val || 0)
+  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%'
+}
+
+function ProgressBar({ value, max, colorClass }) {
+  const usedPct = Math.min((value / max) * 100, 100)
+  return (
+    <div className="w-full bg-gray-200 rounded-full h-2">
+      <div
+        className={'h-2 rounded-full transition-all ' + colorClass}
+        style={{ width: usedPct + '%' }}
+      />
+    </div>
+  )
+}
+
+function TFSAContributionBar({ current, limit }) {
+  const used = Number(current || 0)
+  const isOver = used > limit
+  const remaining = Math.max(limit - used, 0)
+  const usedPct = Math.min((used / limit) * 100, 100)
+  const colorClass = isOver ? 'bg-red-500' : usedPct > 80 ? 'bg-yellow-500' : 'bg-emerald-500'
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100">
+      <div className="flex justify-between items-center mb-1">
+        <span className="text-xs text-emerald-700 font-medium">{CURRENT_YEAR} Contributions</span>
+        <span className={'text-xs font-medium ' + (isOver ? 'text-red-600' : 'text-gray-600')}>
+          {fmt(used)} / {fmt(limit)}
+        </span>
+      </div>
+      <ProgressBar value={used} max={limit} colorClass={colorClass} />
+      <div className="flex justify-between mt-1">
+        <span className="text-xs text-gray-500">
+          {isOver
+            ? <span className="text-red-600 font-medium">Over by {fmt(used - limit)}</span>
+            : <span>{fmt(remaining)} remaining</span>
+          }
+        </span>
+        <span className="text-xs text-gray-400">{usedPct.toFixed(0)}% used</span>
+      </div>
+    </div>
+  )
+}
+
+export default function Dashboard() {
+  const [portfolios, setPortfolios] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showModal, setShowModal] = useState(false)
+  const [form, setForm] = useState({ name: '', type: 'TFSA', description: '' })
+  const [saving, setSaving] = useState(false)
+
+  const fetchPortfolios = async () => {
+    try {
+      const { data } = await api.get('/portfolios')
+      setPortfolios(data)
+    } catch (err) {
+      console.error('Failed to load portfolios:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchPortfolios() }, [])
+
+  const handleCreate = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      await api.post('/portfolios', form)
+      setShowModal(false)
+      setForm({ name: '', type: 'TFSA', description: '' })
+      fetchPortfolios()
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to create portfolio')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const totalBook = portfolios.reduce((s, p) => s + Number(p.total_book_value || 0), 0)
+  const totalMarket = portfolios.reduce((s, p) => s + Number(p.total_market_value || 0), 0)
+  const totalGain = totalBook > 0 ? ((totalMarket - totalBook) / totalBook * 100) : 0
+
+  const tfsaPortfolios = portfolios.filter((p) => p.type === 'TFSA')
+  const hasTFSA = tfsaPortfolios.length > 0
+  const totalLifetimeContributions = tfsaPortfolios.reduce((s, p) => s + Number(p.total_contributions || 0), 0)
+  const currentYearContributions = tfsaPortfolios.reduce((s, p) => s + Number(p.current_year_contributions || 0), 0)
+  const totalDividends = tfsaPortfolios.reduce((s, p) => s + Number(p.total_dividends || 0), 0)
+  const currentYearDividends = tfsaPortfolios.reduce((s, p) => s + Number(p.current_year_dividends || 0), 0)
+  const lifetimeRoomRemaining = Math.max(TFSA_LIFETIME_LIMIT - totalLifetimeContributions, 0)
+  const currentYearRemaining = Math.max(TFSA_ANNUAL_LIMIT - currentYearContributions, 0)
+  const lifetimeUsedPct = Math.min((totalLifetimeContributions / TFSA_LIFETIME_LIMIT) * 100, 100)
+
+  if (loading) {
+    return <div className="flex justify-center items-center h-64 text-gray-500">Loading...</div>
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-8">
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <button
+          onClick={() => setShowModal(true)}
+          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md font-medium transition-colors"
+        >
+          + New Portfolio
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <p className="text-sm text-gray-500">Total Book Value</p>
+          <p className="text-2xl font-bold text-gray-900">{fmt(totalBook)}</p>
+        </div>
+        <div className="bg-white rounded-lg shadow p-6">
+          <p className="text-sm text-gray-500">Total Market Value</p>
+          <p className="text-2xl font-bold text-gray-900">{fmt(totalMarket)}</p>
+        </div>
+        <div className="bg-white rounded-lg shadow p-6">
+          <p className="text-sm text-gray-500">Total Gain / Loss</p>
+          <p className={'text-2xl font-bold ' + (totalMarket - totalBook >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+            {fmt(totalMarket - totalBook)} ({pct(totalGain)})
+          </p>
+        </div>
+      </div>
+
+      {hasTFSA && (
+        <div className="bg-white border border-emerald-200 rounded-lg shadow p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">TFSA Summary</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Maximum lifetime room eligible since 2009: {fmt(TFSA_LIFETIME_LIMIT)}
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+              {CURRENT_YEAR} annual limit: {fmt(TFSA_ANNUAL_LIMIT)}
+            </span>
+          </div>
+
+          <div className="mb-4">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600 font-medium">Lifetime contributions used</span>
+              <span className="font-semibold text-gray-900">
+                {fmt(totalLifetimeContributions)} / {fmt(TFSA_LIFETIME_LIMIT)}
+              </span>
+            </div>
+            <ProgressBar
+              value={totalLifetimeContributions}
+              max={TFSA_LIFETIME_LIMIT}
+              colorClass={lifetimeUsedPct > 90 ? 'bg-red-500' : lifetimeUsedPct > 70 ? 'bg-yellow-500' : 'bg-emerald-500'}
+            />
+            <div className="flex justify-between mt-1">
+              <span className="text-xs text-gray-500">
+                Lifetime room remaining: <span className="font-medium text-emerald-700">{fmt(lifetimeRoomRemaining)}</span>
+              </span>
+              <span className="text-xs text-gray-400">{lifetimeUsedPct.toFixed(1)}% used</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-gray-100 mb-3">
+            <div className="bg-emerald-50 rounded-lg p-3">
+              <p className="text-xs text-emerald-600">{CURRENT_YEAR} Contributed</p>
+              <p className="text-lg font-bold text-emerald-800">{fmt(currentYearContributions)}</p>
+              <p className="text-xs text-emerald-500">of {fmt(TFSA_ANNUAL_LIMIT)} limit</p>
+            </div>
+            <div className="bg-blue-50 rounded-lg p-3">
+              <p className="text-xs text-blue-600">{CURRENT_YEAR} Room Left</p>
+              <p className={'text-lg font-bold ' + (currentYearContributions > TFSA_ANNUAL_LIMIT ? 'text-red-700' : 'text-blue-800')}>
+                {fmt(currentYearRemaining)}
+              </p>
+              <p className="text-xs text-blue-500">
+                {currentYearContributions > TFSA_ANNUAL_LIMIT ? 'Over limit!' : 'available'}
+              </p>
+            </div>
+            <div className="bg-purple-50 rounded-lg p-3">
+              <p className="text-xs text-purple-600">Lifetime Contributed</p>
+              <p className="text-lg font-bold text-purple-800">{fmt(totalLifetimeContributions)}</p>
+              <p className="text-xs text-purple-500">since 2009</p>
+            </div>
+            <div className="bg-orange-50 rounded-lg p-3">
+              <p className="text-xs text-orange-600">Lifetime Room Left</p>
+              <p className="text-lg font-bold text-orange-800">{fmt(lifetimeRoomRemaining)}</p>
+              <p className="text-xs text-orange-500">of {fmt(TFSA_LIFETIME_LIMIT)} total</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-100">
+            <div className="bg-teal-50 rounded-lg p-3">
+              <p className="text-xs text-teal-600">Lifetime Dividends Earned</p>
+              <p className="text-lg font-bold text-teal-800">{fmt(totalDividends)}</p>
+              <p className="text-xs text-teal-500">total tax-free income</p>
+            </div>
+            <div className="bg-teal-50 rounded-lg p-3">
+              <p className="text-xs text-teal-600">{CURRENT_YEAR} Dividends Earned</p>
+              <p className="text-lg font-bold text-teal-800">{fmt(currentYearDividends)}</p>
+              <p className="text-xs text-teal-500">this year so far</p>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-400 mt-3">
+            Based on CRA limits for someone eligible since 2009. Verify actual room at CRA My Account.
+          </p>
+        </div>
+      )}
+
+      {portfolios.length === 0 ? (
+        <div className="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+          <p className="text-lg mb-2">No portfolios yet</p>
+          <p className="text-sm">Click "New Portfolio" to create your first RRSP, TFSA, LIRA, or Non-Registered portfolio.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {portfolios.map((p) => {
+            const book = Number(p.total_book_value || 0)
+            const market = Number(p.total_market_value || 0)
+            const gain = book > 0 ? ((market - book) / book * 100) : 0
+            const isTFSA = p.type === 'TFSA'
+            return (
+              <Link
+                key={p.id}
+                to={'/portfolio/' + p.id}
+                className="bg-white rounded-lg shadow hover:shadow-md transition-shadow p-6 block"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-semibold text-gray-900">{p.name}</h3>
+                  <span className={'px-2 py-1 rounded text-xs font-medium ' + (TYPE_COLORS[p.type] || '')}>
+                    {p.type}
+                  </span>
+                </div>
+                {p.description && (
+                  <p className="text-sm text-gray-500 mb-3">{p.description}</p>
+                )}
+                <div className="grid grid-cols-4 gap-2 text-sm">
+                  <div>
+                    <p className="text-gray-500">Book</p>
+                    <p className="font-medium text-gray-900">{fmt(book)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Market</p>
+                    <p className="font-medium text-gray-900">{fmt(market)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Unrealized</p>
+                    <p className={'font-medium ' + (market - book >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                      {pct(gain)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Realized</p>
+                    <p className={'font-medium ' + (Number(p.total_realized_pnl || 0) >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                      {Number(p.total_realized_pnl || 0) === 0 ? '—' : fmt(p.total_realized_pnl)}
+                    </p>
+                  </div>
+                </div>
+
+                {isTFSA && (
+                  <TFSAContributionBar
+                    current={p.current_year_contributions}
+                    limit={TFSA_ANNUAL_LIMIT}
+                  />
+                )}
+
+                {isTFSA && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 grid grid-cols-2 gap-2 text-xs text-gray-500">
+                    <div>
+                      <span>Lifetime contributions</span>
+                      <p className="font-medium text-gray-700">{fmt(p.total_contributions)}</p>
+                    </div>
+                    <div>
+                      <span>Lifetime dividends</span>
+                      <p className="font-medium text-teal-700">{fmt(p.total_dividends)}</p>
+                    </div>
+                  </div>
+                )}
+              </Link>
+            )
+          })}
+        </div>
+      )}
+
+      <Modal open={showModal} onClose={() => setShowModal(false)} title="New Portfolio">
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+            <select
+              value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              {PORTFOLIO_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
+            <input
+              type="text"
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              onClick={() => setShowModal(false)}
+              className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md disabled:opacity-50"
+            >
+              {saving ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  )
+}

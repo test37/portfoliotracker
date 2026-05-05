@@ -1,0 +1,31 @@
+services:
+  portfolio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_OWNER:-localuser}/portfoliotracker:${TAG:-latest}
+    container_name: portfoliotracker
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      - TZ=${TZ:-UTC}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - web
+    # Traefik / reverse-proxy auto-discovery (safe to ignore if you don't run Traefik)
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portfoliotracker.rule=Host(`${PUBLIC_HOST:-portfolio.localhost}`)"
+      - "traefik.http.routers.portfoliotracker.entrypoints=websecure"
+      - "traefik.http.routers.portfoliotracker.tls.certresolver=letsencrypt"
+      - "traefik.http.services.portfoliotracker.loadbalancer.server.port=8080"
+
+networks:
+  web:
+    driver: bridge
