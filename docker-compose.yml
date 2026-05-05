@@ -1,5 +1,5 @@
-# Local development compose. Builds images from source instead of pulling.
-# For production, use stack.yml (pulls from GHCR).
+# Local development compose. Builds OR pulls images, brings up the full stack
+# including the outer nginx that merges frontend + API onto a single port.
 
 services:
   mariadb:
@@ -22,9 +22,7 @@ services:
     networks: [portfolio_net]
 
   api:
-    build:
-      context: ./site/backend
-    image: portfolio-api:local
+    image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-api:${TAG:-latest}
     container_name: portfolio_api
     restart: unless-stopped
     depends_on:
@@ -50,13 +48,11 @@ services:
     networks: [portfolio_net]
 
   worker:
-    image: portfolio-api:local
+    image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-api:${TAG:-latest}
     container_name: portfolio_worker
     restart: unless-stopped
     command: ["node", "src/worker/index.js"]
     depends_on:
-      api:
-        condition: service_started
       mariadb:
         condition: service_healthy
     environment:
@@ -69,9 +65,7 @@ services:
     networks: [portfolio_net]
 
   frontend:
-    build:
-      context: ./site/frontend
-    image: portfolio-frontend:local
+    image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-frontend:${TAG:-latest}
     container_name: portfolio_frontend
     restart: unless-stopped
     networks: [portfolio_net]
