@@ -1,162 +1,132 @@
 # portfoliotracker
 
-Containerized static portfolio site. Built on `nginx:alpine` (~25 MB image), runs
-as a non-root user, ships with a `/healthz` endpoint, and publishes to GitHub
-Container Registry on every push to `main`.
+Full-stack portfolio tracking app. Five containers:
 
-## Quick start
+| Service     | Image                                              | Purpose                          |
+|-------------|----------------------------------------------------|----------------------------------|
+| `mariadb`   | `mariadb:11`                                       | Database, schema in `site/db/init` |
+| `api`       | `ghcr.io/<owner>/portfolio-api:latest`             | Express API, port 4200            |
+| `worker`    | same image as api, runs `src/worker/index.js`      | Background jobs                   |
+| `frontend`  | `ghcr.io/<owner>/portfolio-frontend:latest`        | Vite/React build behind nginx    |
+| `nginx`     | `nginx:alpine`                                     | Edge proxy, exposes `${APP_PORT}` |
 
-```bash
-docker run -d -p 80:8080 --name portfoliotracker ghcr.io/YOUR_GITHUB_USERNAME/portfoliotracker:latest
+GitHub Actions builds `portfolio-api` and `portfolio-frontend` on every push to
+`main` and pushes them to GHCR (multi-arch: amd64 + arm64).
+
+## First-time deploy (Windows)
+
+```powershell
+cd C:\profile\portfoliotracker
+
+# 1. Remove the leftover wrapper files from the static-site attempt
+.\cleanup-old-files.ps1
+
+# 2. Create .env from the template and edit it
+copy .env.example .env
+notepad .env       # set MYSQL_*, JWT_SECRET, SMTP_*
+
+# 3. Local build + run (no GHCR needed yet)
+.\deploy.ps1
 ```
 
-Then open <http://localhost>.
+Visit <http://localhost:8282> (or whatever `APP_PORT` you set).
 
-## Prerequisites
+## After the first push to GitHub
 
-Just **Docker**. That's it.
-- Windows / macOS: <https://www.docker.com/products/docker-desktop>
-- Linux: <https://docs.docker.com/engine/install/>
+GitHub Actions runs and publishes:
 
-For the GitHub workflow you'll also need:
-- A GitHub account
-- [GitHub CLI (`gh`)](https://cli.github.com/) — only for the one-shot setup script
-- Git
+- `ghcr.io/<owner>/portfolio-api:latest`
+- `ghcr.io/<owner>/portfolio-frontend:latest`
 
-## Project layout
+Once those exist, you can deploy without building:
+
+```powershell
+.\deploy.ps1 -Mode pull
+```
+
+## Portainer deployment
+
+1. Stacks → Add stack → **Repository**
+2. Repository URL: `https://github.com/<OWNER>/portfoliotracker`
+3. Compose path: `stack.yml`
+4. Environment variables (paste these in the Portainer panel):
+
+   | Name                   | Notes                                  |
+   |------------------------|----------------------------------------|
+   | `GITHUB_OWNER`         | your GitHub username                   |
+   | `TAG`                  | `latest`                               |
+   | `APP_PORT`             | host port (e.g. `8282`)                |
+   | `PUBLIC_HOST`          | only used by Traefik labels            |
+   | `MYSQL_ROOT_PASSWORD`  | strong random                          |
+   | `MYSQL_DATABASE`       | e.g. `portfolio_db`                    |
+   | `MYSQL_USER`           | e.g. `portfolio_user`                  |
+   | `MYSQL_PASSWORD`       | strong random                          |
+   | `JWT_SECRET`           | 32+ random chars                       |
+   | `ALPHA_VANTAGE_KEY`    | optional                               |
+   | `SMTP_HOST` etc.       | from your mail provider                |
+
+5. Deploy.
+
+If your GHCR images are private, also add a Portainer registry:
+**Registries → Add registry → GitHub → username + PAT with `read:packages`**.
+
+## Local-only quick start
+
+```powershell
+cp .env.example .env       # edit it
+docker compose up -d --build
+```
+
+`docker compose down` to stop. `docker compose logs -f api` to tail.
+
+## What's where
 
 ```
 portfoliotracker/
-├── site/                   ← your portfolio files go here (index.html, css, js, …)
-├── Dockerfile
-├── nginx.conf
-├── docker-compose.yml
-├── stack.yml               ← Portainer stack
-├── .dockerignore
-├── .env.example
-├── .github/workflows/deploy.yml
-├── deploy.sh / .bat / .ps1 ← one-command run scripts
-├── setup-and-push.ps1      ← Windows: copy files + push to GitHub
-└── README.md
+├── .github/workflows/deploy.yml  ← builds + pushes API + frontend to GHCR
+├── docker-compose.yml            ← LOCAL: builds from ./site/*
+├── stack.yml                     ← PROD/Portainer: pulls from GHCR
+├── .env.example                  ← copy to .env
+├── deploy.ps1 / .sh / .bat       ← one-command run
+├── cleanup-old-files.ps1         ← removes wrong wrapper files (run once)
+└── site/                         ← the actual project (untouched)
+    ├── backend/                  ← Node API + worker (Dockerfile inside)
+    ├── frontend/                 ← Vite/React (Dockerfile inside)
+    ├── db/init/01_schema.sql     ← MariaDB init
+    ├── nginx/conf.d/             ← edge nginx config
+    └── docker-compose.prod.yml   ← original compose, kept for reference
 ```
 
-## First-time setup (Windows, automated)
+## Things to know / honest caveats
 
-1. Drop the `portfoliotracker` folder at `C:\profile\portfoliotracker`.
-2. Make sure your portfolio source is at `C:\profile\portfoliogithub`.
-3. Authenticate the GitHub CLI once, with permission to delete repos:
-   ```powershell
-   gh auth login
-   gh auth refresh -h github.com -s delete_repo
-   ```
-4. Run:
-   ```powershell
-   cd C:\profile\portfoliotracker
-   .\setup-and-push.ps1 -GitHubOwner "your-github-username"
-   ```
+- **Database is MariaDB**, not Postgres. The schema in `site/db/init/01_schema.sql` is MariaDB-specific.
+- **The original `site/build-push.sh` pushes to Docker Hub**, the new GitHub Actions workflow pushes to GHCR. Pick one — don't run both or you'll have stale images on Docker Hub.
+- **The original `docker-compose.prod.yml` doesn't pass SMTP env vars to the API**. The new `stack.yml` and `docker-compose.yml` fix this. Mailer features will only work after this fix.
+- **`site/backend/Dockerfile` says `EXPOSE 4100` but the app listens on `PORT=4200`**. Just documentation noise — the app works because PORT is set via env. If you want it tidy, change `EXPOSE 4100` → `EXPOSE 4200` in `site/backend/Dockerfile`.
+- **Git's CRLF warnings on push are normal on Windows** and don't break anything. To silence them: `git config --global core.autocrlf true`.
+- **Bind mounts (`./site/db/init`, `./site/nginx/conf.d`) work in Portainer** because Portainer git-clones the repo before deploying. They will not work if you copy `stack.yml` to a server without the repo.
 
-The script copies your site into `./site/`, wipes any existing `portfoliotracker`
-repo, creates a fresh one, and pushes. GitHub Actions builds and pushes the
-image to `ghcr.io/your-username/portfoliotracker:latest` on its own.
-
-> **Heads-up:** the script force-pushes and deletes the existing repo if it
-> exists. Pass `-SkipRepoWipe` to keep the repo and just push over the top.
-
-## Manual setup (any OS)
+## Deploy on any server (single-command, after Actions has run)
 
 ```bash
-# 1. Put your portfolio files in ./site
-mkdir site && cp -r /path/to/your/portfolio/* site/
-
-# 2. Build and run locally
-docker compose up -d --build
-
-# 3. Or just docker-run
-docker build -t portfoliotracker:local .
-docker run -d -p 8080:8080 --name portfoliotracker portfoliotracker:local
+# Server needs Docker + docker compose plugin
+git clone https://github.com/<OWNER>/portfoliotracker.git
+cd portfoliotracker
+cp .env.example .env && nano .env       # set real values
+docker compose -f stack.yml --env-file .env pull
+docker compose -f stack.yml --env-file .env up -d
 ```
-
-Visit <http://localhost:8080>.
-
-## One-command deploy scripts
-
-| OS              | Command                              |
-|-----------------|--------------------------------------|
-| Linux / macOS   | `./deploy.sh` (build) or `./deploy.sh pull` |
-| Windows cmd     | `deploy.bat` or `deploy.bat pull`    |
-| PowerShell      | `.\deploy.ps1` or `.\deploy.ps1 -Mode pull` |
-
-For `pull` mode, set `GITHUB_OWNER` first (e.g. `export GITHUB_OWNER=youruser`).
-
-## GitHub token setup
-
-The included GitHub Actions workflow uses the **automatically provided
-`GITHUB_TOKEN`** — you don't create or paste anything. It just works once you
-push the repo.
-
-If you want to publish from your laptop instead of CI:
-
-```bash
-# Create a Personal Access Token with 'write:packages' scope at
-# https://github.com/settings/tokens, then:
-echo $YOUR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
-docker build -t ghcr.io/YOUR_USERNAME/portfoliotracker:latest .
-docker push ghcr.io/YOUR_USERNAME/portfoliotracker:latest
-```
-
-## Portainer / stacker deployment
-
-In Portainer:
-
-1. **Stacks → Add stack → Repository**
-2. Repository URL: `https://github.com/YOUR_USERNAME/portfoliotracker`
-3. Compose path: `stack.yml`
-4. Environment variables:
-   | Name           | Value                            |
-   |----------------|----------------------------------|
-   | `GITHUB_OWNER` | your GitHub username             |
-   | `TAG`          | `latest`                         |
-   | `HOST_PORT`    | `8080` (or whatever you want)    |
-   | `PUBLIC_HOST`  | `portfolio.example.com` (Traefik) |
-5. **Deploy the stack**.
-
-If the image is private, also add Portainer → **Registries → Add registry →
-GitHub** with a PAT that has `read:packages`.
 
 ## Troubleshooting
 
-**Container exits immediately**
-`docker logs portfoliotracker` — usually means `./site/` is empty or has no
-`index.html`.
+**`api` container restarts with `connect ECONNREFUSED ... 3306`**
+MariaDB is still initializing. Wait 30s; the `depends_on: condition: service_healthy` should handle this, but on slow disks the first boot can exceed the healthcheck retries. Increase `retries` in the compose if needed.
 
-**404 for client-side routes (React Router etc.)**
-The default `nginx.conf` already falls back to `index.html`. If you removed
-that, restore the `try_files $uri $uri/ /index.html;` line.
+**404 on `/api/...` from the frontend**
+Check `site/nginx/conf.d/portfolio.conf` — that's the routing for `/` (frontend) vs `/api` (API). If you renamed services, update upstream names there.
 
-**Permission errors writing to `/var/run/nginx.pid`**
-You're running an older base image. Rebuild — the current Dockerfile chowns the
-pid file before `USER nginx`.
+**`No address associated with hostname` on GHCR pull**
+Image hasn't been published yet. Push to `main` and wait for Actions to finish (~2–4 min for both jobs). Check progress at `https://github.com/<OWNER>/portfoliotracker/actions`.
 
-**`gh repo delete` fails with "missing scope"**
-Run `gh auth refresh -h github.com -s delete_repo` and try again.
-
-**Image is bigger than expected**
-Check `.dockerignore`. Common culprit: `node_modules` getting copied into
-`./site/`.
-
-## What about a build step?
-
-If your portfolio needs `npm run build` (Vite, CRA, Next static export, etc.):
-
-1. Open `Dockerfile` and uncomment the **Stage 1: build** block at the top.
-2. Change the runtime `COPY` line from
-   `COPY --chown=nginx:nginx ./site/ /usr/share/nginx/html/`
-   to
-   `COPY --from=builder --chown=nginx:nginx /app/dist /usr/share/nginx/html` (or `/app/build` for CRA).
-3. Put your source — including `package.json` — at the project root instead of inside `./site/`.
-
-That's the only change.
-
-## License
-
-MIT
+**Mailer crashes the API on startup**
+Either set real SMTP values in `.env` or comment out the mailer import in `site/backend/src/index.js` until you have one.

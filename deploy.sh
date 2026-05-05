@@ -1,47 +1,45 @@
 #!/usr/bin/env bash
-# One-command deploy script (Linux / macOS).
-# Usage:  ./deploy.sh           # builds locally and runs
-#         ./deploy.sh pull      # pulls from GHCR and runs
 set -euo pipefail
-
-CONTAINER_NAME="portfoliotracker"
-IMAGE_LOCAL="portfoliotracker:local"
-HOST_PORT="${HOST_PORT:-8080}"
-GITHUB_OWNER="${GITHUB_OWNER:-}"
-TAG="${TAG:-latest}"
-
-if ! command -v docker >/dev/null 2>&1; then
-  echo "❌ Docker is not installed. Install it from https://docs.docker.com/get-docker/"
-  exit 1
-fi
 
 MODE="${1:-build}"
 
-echo "🛑 Stopping any existing container named $CONTAINER_NAME..."
-docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-
-if [[ "$MODE" == "pull" ]]; then
-  if [[ -z "$GITHUB_OWNER" ]]; then
-    echo "❌ GITHUB_OWNER env var must be set to pull from GHCR (e.g. GITHUB_OWNER=youruser ./deploy.sh pull)"
-    exit 1
-  fi
-  IMAGE="ghcr.io/${GITHUB_OWNER}/portfoliotracker:${TAG}"
-  echo "📥 Pulling $IMAGE..."
-  docker pull "$IMAGE"
-else
-  IMAGE="$IMAGE_LOCAL"
-  echo "🔨 Building $IMAGE locally..."
-  docker build -t "$IMAGE" .
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: Docker is not installed. https://docs.docker.com/get-docker/"
+  exit 1
 fi
 
-echo "🚀 Starting container on http://localhost:${HOST_PORT}..."
-docker run -d \
-  --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
-  -p "${HOST_PORT}:8080" \
-  "$IMAGE"
+if [[ ! -f .env ]]; then
+  if [[ -f .env.example ]]; then
+    echo "No .env found. Copying .env.example to .env -- EDIT IT before continuing."
+    cp .env.example .env
+    echo "Open .env in a text editor, set passwords/secrets, then re-run this script."
+    exit 1
+  fi
+  echo "ERROR: .env.example missing."
+  exit 1
+fi
 
+if grep -q 'replace-with-a-long-random-string' .env; then
+  echo "ERROR: .env still has placeholder JWT_SECRET. Edit it before deploying."
+  exit 1
+fi
+if grep -q 'change-me' .env; then
+  echo "WARNING: .env still has 'change-me' values. You should set real passwords."
+  read -r -p "Continue anyway? (y/N) " resp
+  [[ "$resp" == "y" ]] || exit 1
+fi
+
+if [[ "$MODE" == "pull" ]]; then
+  echo "Pulling images and starting via stack.yml..."
+  docker compose -f stack.yml --env-file .env pull
+  docker compose -f stack.yml --env-file .env up -d
+else
+  echo "Building locally and starting via docker-compose.yml..."
+  docker compose --env-file .env up -d --build
+fi
+
+PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2 || echo 8282)
 echo ""
-echo "✅ Deployed. Access: http://localhost:${HOST_PORT}"
-echo "   Logs:  docker logs -f $CONTAINER_NAME"
-echo "   Stop:  docker rm -f $CONTAINER_NAME"
+echo "Stack is up. http://localhost:${PORT:-8282}"
+echo "  Logs:  docker compose logs -f"
+echo "  Stop:  docker compose down"

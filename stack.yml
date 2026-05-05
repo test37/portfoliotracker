@@ -1,33 +1,106 @@
-# Portainer stack file.
-# Deploy via: Portainer → Stacks → Add Stack → Repository
-#   Repository URL:  https://github.com/OWNER/portfoliotracker
+# Portainer stack — pulls prebuilt images from GHCR.
+#
+# Deploy: Portainer → Stacks → Add Stack → Repository
+#   Repository URL:  https://github.com/<OWNER>/portfoliotracker
 #   Compose path:    stack.yml
-# Set environment variables in the Portainer UI (GITHUB_OWNER, TAG, HOST_PORT, PUBLIC_HOST).
+#
+# Required environment variables (set in Portainer's "Environment variables" panel):
+#   GITHUB_OWNER, MYSQL_ROOT_PASSWORD, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD,
+#   JWT_SECRET, ALPHA_VANTAGE_KEY (optional),
+#   SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM,
+#   APP_PORT (default 8282), TAG (default latest)
 
 services:
-  portfolio:
-    image: ghcr.io/${GITHUB_OWNER}/portfoliotracker:${TAG:-latest}
-    container_name: portfoliotracker
+  mariadb:
+    image: mariadb:11
+    container_name: portfolio_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./site/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [portfolio_net]
+
+  api:
+    image: ghcr.io/${GITHUB_OWNER}/portfolio-api:${TAG:-latest}
+    container_name: portfolio_api
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      PORT: 4200
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - api_uploads:/app/uploads
+    networks: [portfolio_net]
+
+  worker:
+    image: ghcr.io/${GITHUB_OWNER}/portfolio-api:${TAG:-latest}
+    container_name: portfolio_worker
+    restart: unless-stopped
+    command: ["node", "src/worker/index.js"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY:-}
+    networks: [portfolio_net]
+
+  frontend:
+    image: ghcr.io/${GITHUB_OWNER}/portfolio-frontend:${TAG:-latest}
+    container_name: portfolio_frontend
+    restart: unless-stopped
+    networks: [portfolio_net]
+
+  nginx:
+    image: nginx:alpine
+    container_name: portfolio_nginx
     restart: unless-stopped
     ports:
-      - "${HOST_PORT:-8080}:8080"
-    environment:
-      - TZ=${TZ:-UTC}
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - web
+      - "${APP_PORT:-8282}:80"
+    depends_on: [api, frontend]
+    volumes:
+      - ./site/nginx/conf.d:/etc/nginx/conf.d:ro
+      - api_uploads:/var/www/uploads:ro
+    networks: [portfolio_net]
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.portfoliotracker.rule=Host(`${PUBLIC_HOST:-portfolio.example.com}`)"
       - "traefik.http.routers.portfoliotracker.entrypoints=websecure"
       - "traefik.http.routers.portfoliotracker.tls.certresolver=letsencrypt"
-      - "traefik.http.services.portfoliotracker.loadbalancer.server.port=8080"
+      - "traefik.http.services.portfoliotracker.loadbalancer.server.port=80"
 
 networks:
-  web:
+  portfolio_net:
     driver: bridge
+
+volumes:
+  mariadb_data:
+  api_uploads:

@@ -1,31 +1,97 @@
+# Local development compose. Builds images from source instead of pulling.
+# For production, use stack.yml (pulls from GHCR).
+
 services:
-  portfolio:
+  mariadb:
+    image: mariadb:11
+    container_name: portfolio_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-portfolio_db}
+      MYSQL_USER: ${MYSQL_USER:-portfolio_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./site/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [portfolio_net]
+
+  api:
     build:
-      context: .
-      dockerfile: Dockerfile
-    image: ghcr.io/${GITHUB_OWNER:-localuser}/portfoliotracker:${TAG:-latest}
-    container_name: portfoliotracker
+      context: ./site/backend
+    image: portfolio-api:local
+    container_name: portfolio_api
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      PORT: 4200
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-portfolio_db}
+      DB_USER: ${MYSQL_USER:-portfolio_user}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - api_uploads:/app/uploads
+    networks: [portfolio_net]
+
+  worker:
+    image: portfolio-api:local
+    container_name: portfolio_worker
+    restart: unless-stopped
+    command: ["node", "src/worker/index.js"]
+    depends_on:
+      api:
+        condition: service_started
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-portfolio_db}
+      DB_USER: ${MYSQL_USER:-portfolio_user}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      ALPHA_VANTAGE_KEY: ${ALPHA_VANTAGE_KEY:-}
+    networks: [portfolio_net]
+
+  frontend:
+    build:
+      context: ./site/frontend
+    image: portfolio-frontend:local
+    container_name: portfolio_frontend
+    restart: unless-stopped
+    networks: [portfolio_net]
+
+  nginx:
+    image: nginx:alpine
+    container_name: portfolio_nginx
     restart: unless-stopped
     ports:
-      - "${HOST_PORT:-8080}:8080"
-    environment:
-      - TZ=${TZ:-UTC}
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - web
-    # Traefik / reverse-proxy auto-discovery (safe to ignore if you don't run Traefik)
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.portfoliotracker.rule=Host(`${PUBLIC_HOST:-portfolio.localhost}`)"
-      - "traefik.http.routers.portfoliotracker.entrypoints=websecure"
-      - "traefik.http.routers.portfoliotracker.tls.certresolver=letsencrypt"
-      - "traefik.http.services.portfoliotracker.loadbalancer.server.port=8080"
+      - "${APP_PORT:-8282}:80"
+    depends_on: [api, frontend]
+    volumes:
+      - ./site/nginx/conf.d:/etc/nginx/conf.d:ro
+      - api_uploads:/var/www/uploads:ro
+    networks: [portfolio_net]
 
 networks:
-  web:
+  portfolio_net:
     driver: bridge
+
+volumes:
+  mariadb_data:
+  api_uploads:

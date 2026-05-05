@@ -1,42 +1,43 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set CONTAINER_NAME=portfoliotracker
-set IMAGE_LOCAL=portfoliotracker:local
-if "%HOST_PORT%"=="" set HOST_PORT=8080
-if "%TAG%"=="" set TAG=latest
-
-where docker >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] Docker is not installed. Install Docker Desktop: https://www.docker.com/products/docker-desktop
-  exit /b 1
-)
-
 set MODE=%1
 if "%MODE%"=="" set MODE=build
 
-echo Stopping existing container if present...
-docker rm -f %CONTAINER_NAME% >nul 2>&1
-
-if /I "%MODE%"=="pull" (
-  if "%GITHUB_OWNER%"=="" (
-    echo [ERROR] Set GITHUB_OWNER to pull from GHCR.   Example:   set GITHUB_OWNER=youruser ^&^& deploy.bat pull
-    exit /b 1
-  )
-  set IMAGE=ghcr.io/%GITHUB_OWNER%/portfoliotracker:%TAG%
-  echo Pulling !IMAGE!...
-  docker pull !IMAGE! || exit /b 1
-) else (
-  set IMAGE=%IMAGE_LOCAL%
-  echo Building !IMAGE! locally...
-  docker build -t !IMAGE! . || exit /b 1
+where docker >nul 2>&1
+if errorlevel 1 (
+  echo ERROR: Docker is not installed. https://www.docker.com/products/docker-desktop
+  exit /b 1
 )
 
-echo Starting container on http://localhost:%HOST_PORT% ...
-docker run -d --name %CONTAINER_NAME% --restart unless-stopped -p %HOST_PORT%:8080 !IMAGE! || exit /b 1
+if not exist .env (
+  if exist .env.example (
+    echo No .env found. Copying .env.example to .env -- EDIT IT before continuing.
+    copy .env.example .env >nul
+    echo Open .env in a text editor, set passwords/secrets, then re-run this script.
+    exit /b 1
+  )
+  echo ERROR: .env.example missing.
+  exit /b 1
+)
+
+findstr /C:"replace-with-a-long-random-string" .env >nul
+if not errorlevel 1 (
+  echo ERROR: .env still has placeholder JWT_SECRET. Edit it before deploying.
+  exit /b 1
+)
+
+if /I "%MODE%"=="pull" (
+  echo Pulling images and starting via stack.yml...
+  docker compose -f stack.yml --env-file .env pull || exit /b 1
+  docker compose -f stack.yml --env-file .env up -d || exit /b 1
+) else (
+  echo Building locally and starting via docker-compose.yml...
+  docker compose --env-file .env up -d --build || exit /b 1
+)
 
 echo.
-echo Deployed. Access: http://localhost:%HOST_PORT%
-echo   Logs:  docker logs -f %CONTAINER_NAME%
-echo   Stop:  docker rm -f %CONTAINER_NAME%
+echo Stack is up. Check the APP_PORT setting in your .env for the URL.
+echo   Logs:  docker compose logs -f
+echo   Stop:  docker compose down
 endlocal
