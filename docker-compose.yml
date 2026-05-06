@@ -1,9 +1,8 @@
-# Local development compose. Uses service names (no fixed container_name)
-# so it doesn't collide with other deployments on the same Docker host.
+# Local dev compose - pulls all images from GHCR. No bind mounts.
 
 services:
   mariadb:
-    image: mariadb:11
+    image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-db:${TAG:-latest}
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
@@ -12,12 +11,12 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
     volumes:
       - mariadb_data:/var/lib/mysql
-      - ./site/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks: [portfolio_net]
 
   api:
@@ -67,13 +66,12 @@ services:
     networks: [portfolio_net]
 
   nginx:
-    image: nginx:alpine
+    image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-nginx:${TAG:-latest}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8282}:80"
     depends_on: [api, frontend]
     volumes:
-      - ./site/nginx/conf.d:/etc/nginx/conf.d:ro
       - api_uploads:/var/www/uploads:ro
     networks: [portfolio_net]
 

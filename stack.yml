@@ -1,6 +1,5 @@
-# Portainer stack — pulls prebuilt images from GHCR.
-# No container_name: declarations, so Portainer prefixes them with the stack name.
-# This lets you run multiple deployments side by side.
+# Portainer stack — pulls all images from GHCR.
+# No bind mounts to host filesystem. Fully self-contained.
 #
 # Required env vars (set in Portainer's "Environment variables" panel):
 #   GITHUB_OWNER, MYSQL_ROOT_PASSWORD, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD,
@@ -10,7 +9,7 @@
 
 services:
   mariadb:
-    image: mariadb:11
+    image: ghcr.io/${GITHUB_OWNER}/portfolio-db:${TAG:-latest}
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -19,12 +18,12 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mariadb_data:/var/lib/mysql
-      - ./site/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks: [portfolio_net]
 
   api:
@@ -74,21 +73,14 @@ services:
     networks: [portfolio_net]
 
   nginx:
-    image: nginx:alpine
+    image: ghcr.io/${GITHUB_OWNER}/portfolio-nginx:${TAG:-latest}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8282}:80"
     depends_on: [api, frontend]
     volumes:
-      - ./site/nginx/conf.d:/etc/nginx/conf.d:ro
       - api_uploads:/var/www/uploads:ro
     networks: [portfolio_net]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.portfoliotracker.rule=Host(`${PUBLIC_HOST:-portfolio.example.com}`)"
-      - "traefik.http.routers.portfoliotracker.entrypoints=websecure"
-      - "traefik.http.routers.portfoliotracker.tls.certresolver=letsencrypt"
-      - "traefik.http.services.portfoliotracker.loadbalancer.server.port=80"
 
 networks:
   portfolio_net:
