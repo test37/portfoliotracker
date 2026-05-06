@@ -1,132 +1,147 @@
 # portfoliotracker
 
-Full-stack portfolio tracking app. Five containers:
+Full-stack portfolio tracking app. Five containers, all from prebuilt images on GHCR. Deploys via Portainer or plain `docker compose` with no host filesystem dependencies.
 
-| Service     | Image                                              | Purpose                          |
-|-------------|----------------------------------------------------|----------------------------------|
-| `mariadb`   | `mariadb:11`                                       | Database, schema in `site/db/init` |
-| `api`       | `ghcr.io/<owner>/portfolio-api:latest`             | Express API, port 4200            |
-| `worker`    | same image as api, runs `src/worker/index.js`      | Background jobs                   |
-| `frontend`  | `ghcr.io/<owner>/portfolio-frontend:latest`        | Vite/React build behind nginx    |
-| `nginx`     | `nginx:alpine`                                     | Edge proxy, exposes `${APP_PORT}` |
+## Architecture
 
-GitHub Actions builds `portfolio-api` and `portfolio-frontend` on every push to
-`main` and pushes them to GHCR (multi-arch: amd64 + arm64).
+| Service | Image | Port | Purpose |
+|---------|-------|------|---------|
+| `mariadb` | `ghcr.io/<owner>/portfolio-db` | 3306 (internal) | Database with schema baked in |
+| `api` | `ghcr.io/<owner>/portfolio-api` | 4200 (internal) | Express API |
+| `worker` | `ghcr.io/<owner>/portfolio-api` | — | Background jobs |
+| `frontend` | `ghcr.io/<owner>/portfolio-frontend` | 3000 (internal) | Vite/React build behind nginx |
+| `nginx` | `ghcr.io/<owner>/portfolio-nginx` | `${APP_PORT}` (host) | Edge proxy, routes `/` to frontend, `/api/*` to api |
 
-## First-time deploy (Windows)
+GitHub Actions builds all four images for amd64 + arm64 on every push to `main`. No host bind mounts — everything is in the images.
 
-```powershell
-cd C:\profile\portfoliotracker
+## Required environment variables
 
-# 1. Remove the leftover wrapper files from the static-site attempt
-.\cleanup-old-files.ps1
+| Name | Example | Required |
+|------|---------|----------|
+| `GITHUB_OWNER` | `test37` | yes |
+| `TAG` | `latest` | no (default `latest`) |
+| `APP_PORT` | `8283` | no (default `8282`) |
+| `MYSQL_ROOT_PASSWORD` | strong password | yes |
+| `MYSQL_DATABASE` | `portfolio_db` | yes |
+| `MYSQL_USER` | `portfolio_user` | yes |
+| `MYSQL_PASSWORD` | strong password | yes |
+| `JWT_SECRET` | 32+ random chars | yes |
+| `ALPHA_VANTAGE_KEY` | API key | no |
+| `SMTP_HOST` `SMTP_PORT` `SMTP_SECURE` `SMTP_USER` `SMTP_PASS` `SMTP_FROM` | mail server config | no (password reset emails won't work without these) |
 
-# 2. Create .env from the template and edit it
-copy .env.example .env
-notepad .env       # set MYSQL_*, JWT_SECRET, SMTP_*
+Generate `JWT_SECRET` with `openssl rand -base64 48`.
 
-# 3. Local build + run (no GHCR needed yet)
-.\deploy.ps1
-```
+## Deploy on a Linux server (CLI)
 
-Visit <http://localhost:8282> (or whatever `APP_PORT` you set).
-
-## After the first push to GitHub
-
-GitHub Actions runs and publishes:
-
-- `ghcr.io/<owner>/portfolio-api:latest`
-- `ghcr.io/<owner>/portfolio-frontend:latest`
-
-Once those exist, you can deploy without building:
-
-```powershell
-.\deploy.ps1 -Mode pull
-```
-
-## Portainer deployment
-
-1. Stacks → Add stack → **Repository**
-2. Repository URL: `https://github.com/<OWNER>/portfoliotracker`
-3. Compose path: `stack.yml`
-4. Environment variables (paste these in the Portainer panel):
-
-   | Name                   | Notes                                  |
-   |------------------------|----------------------------------------|
-   | `GITHUB_OWNER`         | your GitHub username                   |
-   | `TAG`                  | `latest`                               |
-   | `APP_PORT`             | host port (e.g. `8282`)                |
-   | `PUBLIC_HOST`          | only used by Traefik labels            |
-   | `MYSQL_ROOT_PASSWORD`  | strong random                          |
-   | `MYSQL_DATABASE`       | e.g. `portfolio_db`                    |
-   | `MYSQL_USER`           | e.g. `portfolio_user`                  |
-   | `MYSQL_PASSWORD`       | strong random                          |
-   | `JWT_SECRET`           | 32+ random chars                       |
-   | `ALPHA_VANTAGE_KEY`    | optional                               |
-   | `SMTP_HOST` etc.       | from your mail provider                |
-
-5. Deploy.
-
-If your GHCR images are private, also add a Portainer registry:
-**Registries → Add registry → GitHub → username + PAT with `read:packages`**.
-
-## Local-only quick start
-
-```powershell
-cp .env.example .env       # edit it
-docker compose up -d --build
-```
-
-`docker compose down` to stop. `docker compose logs -f api` to tail.
-
-## What's where
-
-```
-portfoliotracker/
-├── .github/workflows/deploy.yml  ← builds + pushes API + frontend to GHCR
-├── docker-compose.yml            ← LOCAL: builds from ./site/*
-├── stack.yml                     ← PROD/Portainer: pulls from GHCR
-├── .env.example                  ← copy to .env
-├── deploy.ps1 / .sh / .bat       ← one-command run
-├── cleanup-old-files.ps1         ← removes wrong wrapper files (run once)
-└── site/                         ← the actual project (untouched)
-    ├── backend/                  ← Node API + worker (Dockerfile inside)
-    ├── frontend/                 ← Vite/React (Dockerfile inside)
-    ├── db/init/01_schema.sql     ← MariaDB init
-    ├── nginx/conf.d/             ← edge nginx config
-    └── docker-compose.prod.yml   ← original compose, kept for reference
-```
-
-## Things to know / honest caveats
-
-- **Database is MariaDB**, not Postgres. The schema in `site/db/init/01_schema.sql` is MariaDB-specific.
-- **The original `site/build-push.sh` pushes to Docker Hub**, the new GitHub Actions workflow pushes to GHCR. Pick one — don't run both or you'll have stale images on Docker Hub.
-- **The original `docker-compose.prod.yml` doesn't pass SMTP env vars to the API**. The new `stack.yml` and `docker-compose.yml` fix this. Mailer features will only work after this fix.
-- **`site/backend/Dockerfile` says `EXPOSE 4100` but the app listens on `PORT=4200`**. Just documentation noise — the app works because PORT is set via env. If you want it tidy, change `EXPOSE 4100` → `EXPOSE 4200` in `site/backend/Dockerfile`.
-- **Git's CRLF warnings on push are normal on Windows** and don't break anything. To silence them: `git config --global core.autocrlf true`.
-- **Bind mounts (`./site/db/init`, `./site/nginx/conf.d`) work in Portainer** because Portainer git-clones the repo before deploying. They will not work if you copy `stack.yml` to a server without the repo.
-
-## Deploy on any server (single-command, after Actions has run)
+Requires Docker and the `compose` plugin.
 
 ```bash
-# Server needs Docker + docker compose plugin
-git clone https://github.com/<OWNER>/portfoliotracker.git
+git clone https://github.com/<owner>/portfoliotracker.git
 cd portfoliotracker
-cp .env.example .env && nano .env       # set real values
+cp .env.example .env
+nano .env                                # set passwords, JWT_SECRET, etc.
 docker compose -f stack.yml --env-file .env pull
 docker compose -f stack.yml --env-file .env up -d
 ```
 
+Open the firewall if needed (RHEL/Rocky example):
+
+```bash
+firewall-cmd --add-port=8283/tcp --permanent
+firewall-cmd --reload
+```
+
+App: `http://<server>:8283`.
+
+## Deploy via Portainer
+
+1. **Stacks → + Add stack**
+2. **Name:** `portfoliotracker`
+3. **Build method:** Repository
+4. **Repository URL:** `https://github.com/<owner>/portfoliotracker`
+5. **Compose path:** `stack.yml`
+6. Scroll to **Environment variables** and add each variable from the table above
+7. **Deploy the stack**
+
+Wait 60–90 seconds for first boot (mariadb initializes the schema). Then visit `http://<server>:<APP_PORT>`.
+
+If your GHCR images are private, also add a registry under **Registries → + Add registry → Custom registry** with URL `ghcr.io` and a GitHub Personal Access Token that has the `read:packages` scope.
+
+## Deploy locally (Windows / macOS)
+
+```powershell
+cd portfoliotracker
+copy .env.example .env
+notepad .env
+docker compose pull
+docker compose up -d
+```
+
+App: `http://localhost:8282` (or whatever `APP_PORT` you set).
+
+## Updating
+
+When new commits land on `main`, GitHub Actions rebuilds the images and updates the `latest` tags. To pull the new images:
+
+**Portainer:** click the stack → **Pull and redeploy**.
+
+**CLI:**
+```bash
+docker compose -f stack.yml --env-file .env pull
+docker compose -f stack.yml --env-file .env up -d
+```
+
+## First-use steps inside the app
+
+1. Register an account
+2. **Create a portfolio** before trying anything else — most features (including CSV import) require a portfolio to exist first
+3. Add holdings, transactions, etc.
+
 ## Troubleshooting
 
-**`api` container restarts with `connect ECONNREFUSED ... 3306`**
-MariaDB is still initializing. Wait 30s; the `depends_on: condition: service_healthy` should handle this, but on slow disks the first boot can exceed the healthcheck retries. Increase `retries` in the compose if needed.
+**Container `portfoliotracker-mariadb-1` is unhealthy** — Most likely env vars are missing. Verify `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` are all set non-empty. If you redeploy with new vars but the same volume, `docker volume rm portfoliotracker_mariadb_data` first.
 
-**404 on `/api/...` from the frontend**
-Check `site/nginx/conf.d/portfolio.conf` — that's the routing for `/` (frontend) vs `/api` (API). If you renamed services, update upstream names there.
+**`502 Bad Gateway` from nginx** — One of the upstream containers (api or frontend) isn't running. Check `docker compose ps` and the failing container's logs.
 
-**`No address associated with hostname` on GHCR pull**
-Image hasn't been published yet. Push to `main` and wait for Actions to finish (~2–4 min for both jobs). Check progress at `https://github.com/<OWNER>/portfoliotracker/actions`.
+**`ERR_CONNECTION_REFUSED` from your laptop** — Server firewall blocking the port. Open it as shown above.
 
-**Mailer crashes the API on startup**
-Either set real SMTP values in `.env` or comment out the mailer import in `site/backend/src/index.js` until you have one.
+**Stack name conflict in Portainer** — If you previously deployed via `docker compose` from the CLI, Portainer may show the stack as "Limited control." Delete it (CLI: `docker compose -p portfoliotracker down -v`), remove `/data/compose/<num>` if it lingers, restart Portainer, then redeploy from the UI.
+
+**Import feature does nothing** — Create a portfolio first. Some forms are disabled until a portfolio exists.
+
+**API container restart loops** — Check logs with `docker logs portfoliotracker-api-1`. Usually a database connection issue (mariadb not yet healthy) or missing env var.
+
+## Repo layout
+
+```
+portfoliotracker/
+├── .github/workflows/deploy.yml  ← builds 4 images on push to main
+├── docker-compose.yml            ← local dev (pulls from GHCR)
+├── stack.yml                     ← Portainer / production
+├── .env.example                  ← template
+├── deploy.ps1 / .sh / .bat       ← convenience wrappers (optional)
+└── site/
+    ├── backend/                  ← Node API + worker (Dockerfile, src/)
+    ├── frontend/                 ← Vite/React (Dockerfile, src/)
+    ├── db/
+    │   ├── Dockerfile            ← extends mariadb:11 with init SQL baked in
+    │   └── init/01_schema.sql
+    └── nginx/
+        ├── Dockerfile            ← extends nginx:alpine with config baked in
+        └── conf.d/portfolio.conf ← routes / to frontend, /api/ to api
+```
+
+## Backups
+
+The database lives in the named volume `portfoliotracker_mariadb_data`. Backup:
+
+```bash
+docker run --rm -v portfoliotracker_mariadb_data:/data -v $(pwd):/backup alpine \
+  tar czf /backup/mariadb-$(date +%F).tar.gz -C /data .
+```
+
+Restore: stop the stack, remove the volume, recreate from backup, start the stack.
+
+## License
+
+MIT
