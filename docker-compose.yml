@@ -1,10 +1,9 @@
-# Local development compose. Builds OR pulls images, brings up the full stack
-# including the outer nginx that merges frontend + API onto a single port.
+# Local development compose. Uses service names (no fixed container_name)
+# so it doesn't collide with other deployments on the same Docker host.
 
 services:
   mariadb:
     image: mariadb:11
-    container_name: portfolio_mariadb
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
@@ -23,7 +22,6 @@ services:
 
   api:
     image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-api:${TAG:-latest}
-    container_name: portfolio_api
     restart: unless-stopped
     depends_on:
       mariadb:
@@ -49,7 +47,6 @@ services:
 
   worker:
     image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-api:${TAG:-latest}
-    container_name: portfolio_worker
     restart: unless-stopped
     command: ["node", "src/worker/index.js"]
     depends_on:
@@ -66,13 +63,11 @@ services:
 
   frontend:
     image: ghcr.io/${GITHUB_OWNER:-test37}/portfolio-frontend:${TAG:-latest}
-    container_name: portfolio_frontend
     restart: unless-stopped
     networks: [portfolio_net]
 
   nginx:
     image: nginx:alpine
-    container_name: portfolio_nginx
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8282}:80"

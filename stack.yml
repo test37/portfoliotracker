@@ -1,10 +1,8 @@
 # Portainer stack — pulls prebuilt images from GHCR.
+# No container_name: declarations, so Portainer prefixes them with the stack name.
+# This lets you run multiple deployments side by side.
 #
-# Deploy: Portainer → Stacks → Add Stack → Repository
-#   Repository URL:  https://github.com/<OWNER>/portfoliotracker
-#   Compose path:    stack.yml
-#
-# Required environment variables (set in Portainer's "Environment variables" panel):
+# Required env vars (set in Portainer's "Environment variables" panel):
 #   GITHUB_OWNER, MYSQL_ROOT_PASSWORD, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD,
 #   JWT_SECRET, ALPHA_VANTAGE_KEY (optional),
 #   SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM,
@@ -13,7 +11,6 @@
 services:
   mariadb:
     image: mariadb:11
-    container_name: portfolio_mariadb
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -32,7 +29,6 @@ services:
 
   api:
     image: ghcr.io/${GITHUB_OWNER}/portfolio-api:${TAG:-latest}
-    container_name: portfolio_api
     restart: unless-stopped
     depends_on:
       mariadb:
@@ -58,7 +54,6 @@ services:
 
   worker:
     image: ghcr.io/${GITHUB_OWNER}/portfolio-api:${TAG:-latest}
-    container_name: portfolio_worker
     restart: unless-stopped
     command: ["node", "src/worker/index.js"]
     depends_on:
@@ -75,13 +70,11 @@ services:
 
   frontend:
     image: ghcr.io/${GITHUB_OWNER}/portfolio-frontend:${TAG:-latest}
-    container_name: portfolio_frontend
     restart: unless-stopped
     networks: [portfolio_net]
 
   nginx:
     image: nginx:alpine
-    container_name: portfolio_nginx
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8282}:80"
